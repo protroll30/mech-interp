@@ -1,88 +1,132 @@
-# Evidence of a Bipartite Induction Circuit in GPT-2 Small (Automated Path Patching)
+# Evidence of a Bipartite Induction Circuit in GPT-2 Small  
+### *Automated path patching on a nonsense-name copy task*
 
-This note summarizes a full mechanistic interpretability pipeline on **GPT-2 small** for a **nonsense-name copy** task (“Argl / Flargh” style prompts). The goal is to move from a 124M-parameter black box to a **small, testable subgraph** that explains most of the behavior **for this specific task**.
+> **TL;DR** — We go from “induction exists” to a **pruned sender→receiver graph**: early heads (layers 0–4) whose path-patched edges most hurt a **logit-difference** copy metric, feeding a small set of **thresholded late induction heads**.
+
+This note summarizes a mechanistic interpretability pipeline on **GPT-2 small** for an **Argl / Flargh**-style **nonsense-name** prompt: the model must rely on **repetition in context**, not lexical priors. The aim is to shrink a **124M-parameter** model, for this task, into a **small causal subgraph** you can actually test.
+
+---
+
+## Pipeline at a glance
+
+| Stage | Question | What we did |
+|------:|----------|-------------|
+| **1** | Does induction show up? | String-built prompts, identical BPE spans, correlational attention score |
+| **2** | Which heads? | Threshold late heads (~18 receivers) |
+| **3** | Are they causal? | Activation patching (Q/K/V), K from corrupted `resid_post` |
+| **4** | How does attention split? | Pathway-specific patches |
+| **5** | Which *edges*? | Path patch early `hook_result` → late `hook_k` via late **W_K** |
+| **6** | Who feeds whom? | **60×*n* receivers** automated heatmap (*n* = thresholded heads) |
 
 ---
 
 ## 1. Hypothesis
 
-**Induction:** After seeing a rare token sequence once, the model can predict the same continuation when a prefix repeats later—even when **lexical priors are useless** (nonsense names, no real-world association). We hypothesize that a subset of attention heads implements this by attending from the **second occurrence** back to the **first**, then copying the appropriate continuation.
+**Induction** means: after a rare sequence appears once, the model can continue it when a **prefix repeats** later—even when **there is no plausible English continuation** (nonsense names). We expect **some attention heads** to link the **second occurrence** back to the **first** and support copying the right continuation.
 
 ---
 
-## 2. Localization (Correlational)
+## 2. Localization (correlational)
 
-We:
+- **Tokenization** — Prompts from **`model.to_tokens`**, with the **same literal substring** twice so BPE does not fake you out.
+- **Counterfactual** — A corrupt prompt with **no shared first-half text** vs clean, so K/V caches are a real counterfactual (not accidentally identical).
+- **Score** — Attention from queries on the **second** span to keys on the **aligned first** span (successor-style offset, not naive duplicate-token matching).
+- **Head set** — Keep heads above a cutoff (e.g. score **> 0.2**), typically **~18** “induction receivers.”
 
-- Built **string prompts** with `model.to_tokens`, forcing **identical BPE substrings** for the repeated prefix so induction is not an artifact of mismatched tokenization.
-- Used a **fully non-repeating counterfactual** corrupt prompt for activation patching (so early-layer K/V caches are not accidentally identical to clean on the first half of the sequence).
-- Scored heads with an **induction-style attention metric**: queries over the **second** span of the repeated prefix, keys at the **aligned** positions in the **first** span (offset chosen so the circuit targets “successor-of-match” behavior, not naive duplicate-token identity).
-- **Thresholded** heads (e.g. score > 0.2) to obtain a small set of **candidate induction receivers** (~18 heads in typical runs).
-
-This step answers: *which heads correlate with the induction pattern?*
+*Answers:* **which heads correlate with the induction pattern?**
 
 ---
 
-## 3. Causal Proof (Interventions)
+## 3. Causal proof (interventions)
 
-We then asked *are those heads necessary?*
+- **Q / K / V patching** — With a proper corrupt cache, **all three** pathways can show an effect; if the corrupt prefix matched clean, K/V patches can look dead while Q still spikes.
+- **Global K stress test** — Overwrite late **`hook_k`** using **LN-scaled** corrupted **`resid_post`** after layer 4 (clean **LN1 scale** per receiver layer).
 
-- **Activation patching** on Q/K/V pathways with the true counterfactual cache showed that **all three pathways** can matter when the corrupt cache actually breaks the repeated structure (earlier pitfall: sharing the first 50 tokens between clean and corrupt makes K/V patches invisible).
-- **Key overwrites from a global corrupted residual** (`resid_post` after layer 4, LN scale frozen from the clean run per receiver layer) stress-tests whether induction can be killed by scrambling what late heads read as “context.”
-
-This step answers: *does ablating or corrupting those components hurt performance in the way induction predicts?*
+*Answers:* **do those heads and pathways actually matter for the metric?**
 
 ---
 
-## 4. Mechanistic Detail (Q / K / V)
+## 4. Mechanistic detail (Q vs K vs V)
 
-Splitting the intervention by pathway separates:
+| Pathway | Role |
+|---------|------|
+| **Q / K** | Whether the head **matches** the right positions |
+| **V** | **What** gets written once attention fires |
 
-- **Whether** the head forms the right match (Q/K),
-- **What** it writes into the stream once it attends (V),
-
-and shows that the story is not “attention is one wire”—different pathways carry different parts of the computation.
-
----
-
-## 5. Circuit Mapping (Path Patching)
-
-**Path patching** replaces a *path-specific* contribution: take an early per-head **write** (from `hook_result`), linearize it through the **receiver’s** \(W_K\) under a **frozen LayerNorm scale** (clean run’s `ln1.hook_scale` at the receiver block), and swap clean vs corrupt projections into the **receiver’s** `hook_k`. That tests a **hypothesized edge** from an early sender head to a late induction head’s key computation.
+So attention is not a single wire: different paths carry different parts of the job.
 
 ---
 
-## 6. Automation (Edge Heatmap)
+## 5. Circuit mapping (path patching)
 
-To map **which early heads send signal into which late induction heads**, we ran **automated path patching**:
+**Path patching** swaps a *specific* channel:
 
-- **Senders:** every head in **layers 0–4** (60 heads).
-- **Receivers:** only the **thresholded induction heads** (~18), not all \(12 \times 12\) late heads—reducing the grid from \(60 \times 36\) to **\(60 \times n_{\text{target}})\)** (e.g. **~1,080** edges instead of **~2,160**).
+1. Read the early head’s **`hook_result`** slice (per-head write).
+2. Divide by the receiver block’s **clean** **`ln1.hook_scale`** (freeze LN as linearized scale).
+3. Multiply by that receiver head’s **`W_K`**.
+4. On the receiver’s **`hook_k`**, replace **clean vs corrupt** projections along that channel:  
+   **patched K** = **K** − **(clean projection)** + **(corrupt projection)**.
 
-Each cell records the **drop in logit difference** (correct vs plausible wrong token at the evaluation position) after patching that single edge: **Δ = (clean logit diff) − (patched logit diff)**. Large positive values mean the edge **supports** the correct continuation under this metric.
+That is a direct test of an **early sender → late receiver key** edge.
+
+---
+
+## 6. Automation (edge heatmap)
+
+We map **which early heads send into which late induction heads** with **automated path patching**.
+
+### Search grid (pruned on purpose)
+
+| Role | Scope | Count |
+|------|-------|------:|
+| **Senders** | Every head in **layers 0–4** | **60** |
+| **Receivers** | Only **thresholded** induction heads | ***n*** (often **~18**) |
+| **Full late grid** *(not used)* | All heads in layers 5–7 | 12×12 = **144** would pair with 60 for **60×144** |
+
+We **do not** patch **60 × 144**. We patch **60 × *n*** instead of **60 × 36** (three full late layers):
+
+| Layout | Edges |
+|--------|------:|
+| Naive “all late layers 5–7” | 60 × 36 = **2160** |
+| **This writeup / code** | 60 × *n* ≈ **60 × 18 = 1080** |
+
+Here *n* is **`n_target`**: the number of heads that pass the induction threshold (your “~18”).
+
+### Cell meaning
+
+After patching **one** sender–receiver edge, we record the **drop in logit difference** (correct token vs a plausible wrong token at the evaluation index):
+
+```text
+Δ logit diff  =  (clean)  −  (patched)
+```
+
+- **Larger positive Δ** → that edge **helps** the model favor the correct continuation under this metric.  
+- **Negative Δ** → patching **helped** the correct answer (a “brake” or anti-copy head under this counterfactual).
 
 ### How to read the heatmap
 
-- **Bright horizontal stripes (senders):** a few early heads account for most of the causal effect on specific receiver columns when patched. In GPT-2 small, **layer-0 “previous token” style heads** often appear as strong senders: they move **position \(t-1\)** information into the residual at \(t\), which downstream induction heads can reuse.
-- **Mid-layer senders (layers 2–3):** sometimes show up as **secondary senders**—heads that refine or route information after the first residual updates, making late induction easier to read.
-- **Column intensity:** for a **sparse** nonsense task, one sometimes sees **one receiver column** (e.g. **L5H5**) dominate the panel: many heads *can* do induction in principle, but **this prompt** may route most of the task through a **narrow late pathway**.
-- **Dark / negative patches:** a patch that **increases** logit difference implies the patched sender normally **hurts** the correct answer under this counterfactual—consistent with **negative induction**, **anti-copy**, or **regularization-like** behavior (e.g. reducing pathological repetition).
+- **Bright horizontal bands** — A few **early senders** drive most of the effect on **specific receiver columns**. Layer **0** often shows **previous-token–style** heads: they move information from **position *t*−1** into position ***t***, which late induction can reuse.
+- **Mid-layer stripes (layers 2–3)** — **Backup / cleanup** routing after the first residual updates.
+- **One hot column** — On a **sparse** nonsense prompt, **one receiver** (e.g. **L5H5**) can dominate: many heads *can* do induction, but **this string** may commit most of the work to **one late pathway**.
+- **Dark (negative) spots** — Patching **raises** the logit diff → that sender usually **suppresses** the good answer here (negative induction, anti-repetition, or similar).
 
-Exact head indices for each stripe should be read off the saved axis labels (row index → layer and head within the L0–L4 sender grid; column label → `L*H*` receiver).
+Use the figure’s **row** index for **sender layer/head** (L0–L4 grid) and **column labels** `L*H*` for receivers.
 
 ---
 
-## 7. Interpretation (What we claim—and what we do not)
+## 7. What we claim — and what we do not
 
-**We claim:** For this **controlled** nonsense-copy setup, we can:
+**We claim** for this **controlled** nonsense-copy setup we can:
 
-1. **Localize** induction-like heads correlatively.
-2. **Causally stress** them with patching and K-overwrites.
-3. **Map a bipartite sender–receiver graph** between early layers and a small receiver set via automated path patching.
+1. **Localize** induction-like heads.  
+2. **Stress them causally** (patching / K overwrite).  
+3. **Sketch a bipartite graph** from automated path patching.
 
-**We do not claim:** That three stripes or a single dominant receiver are **universal** for all text; they are **evidence about this distribution of prompts** and this metric. The same machinery may look more distributed on natural Wikipedia-style repeats.
+**We do not claim** that “three stripes” or “one dominant column” holds on **all** text—only on **this prompt family** and **this metric**. Natural repeats may look **more distributed**.
 
 ---
 
 ## 8. Closing
 
-Starting from “induction exists,” we progressed through **localization → causal interventions → Q/K/V decomposition → path-level edges → automated edge search**. In writeup language, that is exactly the arc of **“Evidence of a Bipartite Induction Circuit in GPT-2 Small via Automated Path Patching”**: not the full 144-node attention graph, but a **deliberately pruned** subgraph that explains **most of the measured effect** for the **Argl–Flargh**-style task.
+**Hypothesis → localization → causal tests → Q/K/V split → path edges → automated heatmap.**  
+That is the story of **“Evidence of a Bipartite Induction Circuit in GPT-2 Small via Automated Path Patching”**: not the full **12×12 = 144** head graph squared, but a **pruned** **60×*n*** edge panel that explains **most of the measured effect** on the **Argl–Flargh**-style task.
