@@ -1,11 +1,5 @@
-"""
-Compare attention vs MLP contribution to the sad-minus-happy logit direction
-on the negation-style prompt.
-
-For each layer L, take blocks.L.hook_attn_out and blocks.L.hook_mlp_out at the
-final token, fold through ln_final.hook_scale (LayerNormPre), and dot with
-W_U[:, sad] - W_U[:, happy]. Plots both curves across layers 0..11.
-"""
+"""Negation prompt: per-layer ``hook_attn_out`` vs ``hook_mlp_out`` projection onto
+sad-minus-happy (ln_final scale fold), plotted across layers."""
 
 from pathlib import Path
 
@@ -33,7 +27,6 @@ def attribution_score(
     d_logit: torch.Tensor,
     scale: torch.Tensor,
 ) -> float:
-    """vec in residual stream pre ln_final; d_logit in ln_final output space."""
     v = vec - vec.mean()
     s = scale.to(dtype=torch.float32).clamp(min=1e-8)
     v_tilde = v / s
@@ -82,10 +75,7 @@ def main() -> None:
         f"(ln_final.hook_scale at last pos: {float(scale_last):.6f})"
     )
     print()
-    print(
-        "Score = dot( (v - mean(v)) / scale , W_U[:,sad] - W_U[:,happy] )\n"
-        "Layer | attn_out | mlp_out"
-    )
+    print("Layer | attn_out | mlp_out")
     print("-" * 42)
     for L in layers:
         print(f"  {L:2d}  | {attn_scores[L]:+8.4f} | {mlp_scores[L]:+8.4f}")

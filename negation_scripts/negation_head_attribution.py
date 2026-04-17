@@ -1,13 +1,5 @@
-"""
-Head attribution for negation-style prompt: project each attention head's write
-at the final token onto the logit-difference direction (sad vs happy).
-
-Direction: W_U[:, sad] - W_U[:, happy] (columns of W_U; logits = ln_out @ W_U).
-
-GPT-2 small uses LayerNormPre on ln_final (center + scale only; gamma folded into
-W_U). Map head vectors into the same frame as ln_out by centering and dividing by
-hook_scale at the final position, then dot with the unembed difference.
-"""
+"""Negation prompt: rank attention head writes by projection onto sad-minus-happy
+in ln_final space (center, divide by ``ln_final.hook_scale``, dot with ``W_U`` diff)."""
 
 import torch
 from transformer_lens import HookedTransformer
@@ -23,14 +15,12 @@ def first_token_id(model: HookedTransformer, fragment: str) -> int:
 
 
 def logit_diff_direction(model: HookedTransformer, id_sad: int, id_happy: int) -> torch.Tensor:
-    """d_model vector: direction in ln_final output space (same space as hook_normalized)."""
     return model.W_U[:, id_sad] - model.W_U[:, id_happy]
 
 
 def head_write(
     cache: dict, layer: int, head: int, last_pos: int, device: torch.device
 ) -> torch.Tensor:
-    """Per-head residual write at last_pos [d_model]. Requires set_use_attn_result(True)."""
     key = f"blocks.{layer}.attn.hook_result"
     return cache[key][0, last_pos, head, :].to(device=device, dtype=torch.float32)
 
@@ -40,11 +30,6 @@ def attribution_score(
     d_logit: torch.Tensor,
     scale: torch.Tensor,
 ) -> float:
-    """
-    head_vec: [d_model] in residual stream (pre ln_final).
-    d_logit: W_U[:, sad] - W_U[:, happy] in ln_final output coordinates.
-    scale: ln_final.hook_scale at this position (scalar, std after centering).
-    """
     h = head_vec - head_vec.mean()
     s = scale.to(dtype=torch.float32).clamp(min=1e-8)
     h_tilde = h / s
@@ -82,10 +67,6 @@ def main() -> None:
         f"(ln_final.hook_scale at last pos: {float(scale_last):.6f})"
     )
     print()
-    print(
-        "Score = dot( (h - mean(h)) / scale_last , W_U[:,sad] - W_U[:,happy] )\n"
-        "Higher -> more alignment with pushing logits toward ' sad' over ' happy'.\n"
-    )
 
     for layer in LAYERS:
         scores: list[tuple[int, float]] = []

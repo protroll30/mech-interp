@@ -1,13 +1,5 @@
-"""
-Negation-style prompt on GPT-2 small: logit lens on hook_resid_post.
-
-Clean: "The man is not happy, he is" -> at final position compare logit(" sad")
-vs logit(" happy"). Baseline ("The man is very happy") is printed for the same
-metric on the full model only.
-
-Logit lens: logits_L = unembed(ln_final(resid_post[L])) at the final sequence
-index, for each layer L.
-"""
+"""Negation prompt: logit lens on ``hook_resid_post`` per layer; baseline prompt
+for the same sad-vs-happy readout on the full model."""
 
 from pathlib import Path
 
@@ -83,10 +75,7 @@ def main() -> None:
         f"Logit lens LD at last pos (layer {n_layers - 1} resid_post): {ld_last:.4f}"
     )
     if abs(ld_last - ld_full_clean) > 0.05:
-        print(
-            "(Note: small mismatch vs full forward logits can happen; "
-            "check TL hook placement.)"
-        )
+        print("(Lens vs full logits can disagree slightly; check hook placement.)")
 
     layers = list(range(n_layers))
     flip_to_sad: int | None = None

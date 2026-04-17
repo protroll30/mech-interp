@@ -1,6 +1,4 @@
-"""
-Visualize attention for GPT-2 small layer 9 head 9 on the clean IOI prompt.
-"""
+"""IOI clean prompt: attention pattern for layer 9 head 9."""
 
 from pathlib import Path
 

@@ -1,8 +1,4 @@
-"""
-IOI residual mid sweep: at S2 only, replace blocks.{L}.hook_resid_mid with the clean
-run's vector for that layer, on an otherwise corrupt forward. Shows which layer's
-clean residual at S2 is enough to swing logit(Mary) - logit(John) back toward Mary.
-"""
+"""IOI: patch clean ``hook_resid_mid`` at S2 into corrupt, one layer at a time."""
 
 from __future__ import annotations
 

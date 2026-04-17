@@ -1,7 +1,4 @@
-"""
-IOI name movers: patch each late-layer head's hook_result from clean into corrupt
-and measure logit-difference recovery toward the clean IOI preference (Mary vs John).
-"""
+"""IOI: clean ``hook_result`` per head into corrupt; recovery toward clean LD."""
 
 import torch
 from transformer_lens import HookedTransformer

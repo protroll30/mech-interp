@@ -23,10 +23,8 @@ prompts = torch.cat([bos, seq, seq], dim=-1)
 n_layers = model.cfg.n_layers
 n_heads = model.cfg.n_heads
 
-# --- 1. Correlational pass (once) ---
 logits, cache = model.run_with_cache(prompts)
 
-# Causal LM: logits[:, t] predicts prompts[:, t + 1].
 logits_first = logits[:, 0:50, :].reshape(-1, vocab_size)
 targets_first = prompts[:, 1:51].reshape(-1)
 loss_first = F.cross_entropy(logits_first, targets_first)
@@ -56,20 +54,16 @@ for layer in range(n_layers):
     paired = pattern[:, :, query_t, key_t]
     induction_scores[layer] = paired.mean(dim=(0, 2))
 
-# --- 2. Head selection (thresholding) ---
 target_mask = induction_scores > 0.20
 target_pairs = torch.nonzero(target_mask, as_tuple=False)
 n_target = target_pairs.shape[0]
 print(f"\nInduction heads with score > 0.20: {n_target}")
 
-# --- Corrupted distribution + cache (for patching) ---
-# Fully non-repeating counterfactual so K/V at keys 1-50 differ from clean (no shared seq in first half).
 seq_b = torch.randint(0, vocab_size, (batch_size, N), dtype=torch.long, device=model.W_E.device)
 seq_c = torch.randint(0, vocab_size, (batch_size, N), dtype=torch.long, device=model.W_E.device)
 prompts_corrupted = torch.cat([bos, seq_b, seq_c], dim=-1)
 _, corrupted_cache = model.run_with_cache(prompts_corrupted)
 
-# --- Overwrite hook_k from full corrupted residual after Layer 4 (per target induction head) ---
 resid_post_4_corrupt = corrupted_cache["blocks.4.hook_resid_post"]
 
 
@@ -112,15 +106,11 @@ print(
     f"{second_seq_ce(logits_k_resid4).item():.4f}"
 )
 
-# --- Path patching: L0 head 5 hook_result -> L5 head 5 hook_k (via W_K of L5H5) ---
-# Step 1: H_early = per-head output at blocks.0.attn.hook_result, shape [batch, seq, n_heads, d_model].
 h_early_clean = cache["blocks.0.attn.hook_result"][:, :, 5, :]
 h_early_corrupt = corrupted_cache["blocks.0.attn.hook_result"][:, :, 5, :]
-# Freeze Layer 5 LN1 scale from clean run (batch, seq, 1); treat LN as linearized at clean scale.
 ln1_scale_clean = cache["blocks.5.ln1.hook_scale"]
 h_early_clean = h_early_clean / ln1_scale_clean
 h_early_corrupt = h_early_corrupt / ln1_scale_clean
-# Step 2: W_K for late head H_late = layer 5, head 5 (shape [d_model, d_head] in TransformerLens).
 W_K_late_h5 = model.blocks[5].attn.W_K[5]
 clean_projected = h_early_clean @ W_K_late_h5
 corrupt_projected = h_early_corrupt @ W_K_late_h5

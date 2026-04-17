@@ -1,11 +1,4 @@
-"""
-IOI S-inhibition style search: inject a sender head's clean hook_result at S2
-(second \"John\") into the *queries* of fixed name-mover heads on a corrupt run.
-
-For each sender (layer 0..8, head 0..11), set each target's hook_q at S2 to
-  (sender_vec @ W_Q[target]),
-where sender_vec is clean blocks.{Ls}.attn.hook_result[:, S2, Hs, :].
-"""
+"""IOI: project clean sender ``hook_result`` at S2 into name-mover ``hook_q``."""
 
 from __future__ import annotations
 
@@ -17,7 +10,6 @@ from transformer_lens import HookedTransformer
 CLEAN = "When John and Mary went to the store, John gave a bottle of milk to"
 CORRUPT = "When John and Mary went to the store, Mary gave a bottle of milk to"
 
-# Name mover heads (layer, head) — queries are patched here at S2 only.
 NAME_MOVER_TARGETS: List[Tuple[int, int]] = [(9, 9), (8, 10), (7, 9)]
 
 SENDER_LAYERS = range(0, 9)

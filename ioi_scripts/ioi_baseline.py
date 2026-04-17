@@ -1,8 +1,4 @@
-"""
-IOI baseline: clean vs corrupted prompt length check and logit difference on clean.
-
-Logit diff = logit(last pos, first token of ' Mary') - logit(last pos, first token of ' John').
-"""
+"""IOI baseline: token length check and Mary-minus-John logit diff on clean."""
 
 import torch
 from transformer_lens import HookedTransformer

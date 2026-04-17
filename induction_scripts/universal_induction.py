@@ -1,15 +1,6 @@
-"""
-Induction vs linguistic prior on a nonsense-name copy task.
+"""Nonsense-name copy task: clean vs corrupt induction; ``INDUCTION_NEEDLE``
+must appear twice verbatim in the clean string (BPE)."""
 
-Clean: CEO introduces a non-associative name once; later the first token of that
-name repeats, and the model must complete the *same* rare second token as in the
-first occurrence (induction), not from general English statistics.
-
-Corrupt: different nonsense first occurrence; second half still repeats the same
-prefix so only the induction path supports the correct continuation.
-
-BPE: INDUCTION_NEEDLE must appear twice verbatim in the clean string (same substring).
-"""
 
 from __future__ import annotations
 
@@ -21,22 +12,15 @@ import torch
 from transformer_lens import HookedTransformer
 
 
-# Set False to skip the (5*12)*(3*12) path-patch grid (many forward passes).
 RUN_EDGE_SEARCH = True
 
 EARLY_LAYER_RANGE = range(0, 5)
 
 
-# --- Nonsense tokens (non-associative; edit if asserts fail) ---
-# Repeated prefix (must appear twice in *clean* with identical surface form).
 INDUCTION_NEEDLE = " Argl"
-# First-occurrence completion (CEO's full invented name = needle + tail).
 TAIL_CLEAN = " Flargh"
-# Different first-occurrence name in corrupt (no shared tail with clean).
 FIRST_CORRUPT = " Zump Qrinx"
-# Correct continuation after second needle = same as first occurrence's tail.
 CONT = TAIL_CLEAN
-# Wrong continuation: first token must differ from CONT's first token.
 WRONG_FIRST = " Vosjq"
 
 CEO_PREFIX = "The CEO of the company is"
