@@ -1,10 +1,10 @@
-# Transformer Forensics: From Circuits to SAE Features
+# Transformer Forensics: Negation Circuits and SAE Falsification in GPT-2 Small
 
-## Overview
+## What this repo is
 
-This repository is a structured, end-to-end mechanistic interpretability study of **GPT-2 Small**. The goal is not to fine-tune behavior from the outside, but to **reverse engineer internal computation**: we trace how information is routed, where symbolic and semantic updates occur, and finally which **sparse autoencoder (SAE) features** implement specific concepts. The tooling is built on **TransformerLens** for full access to activations and hooks, and **SAELens** for loading public SAEs and running feature-level analyses.
+This is a **mechanistic interpretability** codebase for **GPT-2 Small**. We use **TransformerLens** for full forward access, hooks, and caches, and **SAELens** where we study a public sparse autoencoder on MLP outputs. The centerpiece is an **end-to-end causal story for semantic negation** in a fixed completion template, backed by path patching, residual patching, QKV patching, and necessity-style SAE ablations.
 
-The arc is deliberately layered. We start with **circuits** (multi-head pathways that move logits), move to **logic** (where negation is actually implemented in depth), and finish with **atomic features** (interpretable directions in activation space and causal steering).
+The headline result is **not** “layer 8 MLP implements negation” or “SAE feature 20151 is the negation feature.” Controlled runs **falsified** those hypotheses. See **[`formal_writeup.md`](formal_writeup.md)** for the full graph: **early attention routers**, **late attention value pathways (including L7H5)**, and a **late suppressive MLP prior** (including feature **20151** as a **structural** correlate, not a logical negation atom).
 
 ---
 
@@ -24,70 +24,46 @@ mech-interp/
 │   ├── ioi_attention_viz.py
 │   └── ioi_circuit_writeup.md
 ├── negation_scripts/
+│   ├── resid_adjective_patch_sweep.py      # residual patch at " happy", layers 0-6
+│   ├── router_heads_l1_l2_sweep.py         # head-level hook_result patch, L1-L2
+│   ├── early_attn_mlp_adjective_patch.py   # attn vs MLP out at L1-2
+│   ├── l7h5_qkv_patching.py                # Q/K/V path patching for L7H5
 │   ├── negation_baseline.py
 │   ├── negation_head_attribution.py
 │   ├── negation_mlp_attribution.py
-│   └── negation_circuit_writeup.md
+│   └── negation_circuit_writeup.md         # legacy lab notes (superseded by formal writeup)
 ├── sae_scripts/
 │   ├── sae_exploration.py
-│   ├── sae_contrastive_search.py
-│   └── sae_steering.py
+│   ├── sae_contrastive_search.py         # correlational: negated minus clean
+│   ├── sae_steering.py                   # dose response on decoder direction
+│   ├── sae_necessity_test.py             # causal: ablation, DLA, controls
+│   ├── l7h5_attention.py                 # CircuitsVis HTML + attention stats
+│   └── l7h5_attention.html               # generated viz (open in browser)
+├── formal_writeup.md                     # main scientific narrative + code map
 ├── requirements.txt
 ├── LICENSE
 └── README.md
 ```
 
 **`induction_scripts/`**  
-Scripts and notes for **induction-style behavior**: repeated structure in context, and how the model completes copies or patterns. The writeup summarizes what the runs show on controlled prompts.
+Induction-style behavior: repeated structure, path patching edges, and a short writeup.
 
 **`ioi_scripts/`**  
-A compact **Indirect Object Identification (IOI)** style suite on the classic John and Mary template: clean versus corrupt stories, name-mover patching, residual mid sweeps, inhibition-style probes, and attention visualizations. `ioi_circuit_writeup.md` records quantitative takeaways from this repo’s runs.
+Indirect Object Identification style tasks: clean versus corrupt stories, name movers, residual sweeps, inhibition probes. Good **methodological** background for patching and recovery metrics.
 
 **`negation_scripts/`**  
-Negation completion and attribution: baselines, logit lens style traces, per-head writes, and **attention versus MLP** comparisons on a fixed prompt family. `negation_circuit_writeup.md` is the lab-style record of metrics and figures.
+Causal interventions on the negation minimal pair (see `formal_writeup.md`). This is where the **router** and **L7H5 QKV** evidence lives.
 
 **`sae_scripts/`**  
-**SAELens** workflows on **`gpt2-small-mlp-out-v5-32k`** at **`blocks.8.hook_mlp_out`**: exploratory feature ranking, **contrastive** clean versus negated prompts, and **activation steering** with a dose-response curve for a targeted feature.
+SAE loading (**`gpt2-small-mlp-out-v5-32k`**, **`blocks.8.hook_mlp_out`**), contrastive ranking, steering, necessity tests, and L7H5 attention visualization.
 
 ---
 
-## Key experiments and findings
+## How to read the science
 
-### Phase 1: Circuit level (where information moves)
-
-At this scale, the model looks like a network of **attention heads that route information** between positions and depths, plus MLP blocks that mix and transform representations.
-
-**Induction (`induction_scripts/`)**  
-Induction heads implement a recognizable pattern: attend back to earlier context, retrieve a consistent earlier token or relation, and use it to drive the next prediction. The scripts here probe that behavior on copy-style prompts; the writeup ties the numbers back to a concrete circuit story.
-
-**IOI (`ioi_scripts/`)**  
-The IOI template isolates **syntax and role structure** (who gave what to whom) from surface tokens. Attention heads act as **routers**: they move token identities and relational cues so that the final position can favor the correct indirect object (Mary versus John) under clean versus corrupt patching. The suite measures **recovery** under head patching, sweeps **where in depth** a clean residual write is sufficient at the critical site, and probes narrower inhibition channels. Together, this is the macroscopic picture: **which heads carry the decision, and through which residual pathways**.
-
-### Phase 2: Logic level (how concepts transform)
-
-**Negation (`negation_scripts/`)**  
-Here the prompt fixes a simple semantic tension: after *The man is not happy, he is*, does the model lean toward a negative continuation (for example *sad*) or slip back toward *happy*? The interesting finding, supported by linear readouts in these scripts, is a **division of labor**:
-
-- **Attention** largely **preserves and propagates the baseline syntactic frame** (subject, copula, parallel clause), much like the IOI setting where heads route structure.
-- **MLPs** carry a disproportionate share of the **semantic reversal**: the step that actually pushes the representation toward the negated reading rather than repeating the positive predicate.
-
-So the story sharpens: attention is often the **plumbing**, while MLPs are where **polarity and lexical choice** begin to separate. That motivates Phase 3, because SAEs on MLP outputs are a natural place to look for **feature-sized** units of meaning.
-
-### Phase 3: Feature level (what the model is actually thinking)
-
-**SAE analysis (`sae_scripts/`)**  
-We load a public **MLP-output SAE** at layer 8 and treat each latent as a candidate **atomic concept direction** in the space the MLP writes into.
-
-1. **`sae_exploration.py`**  
-   Baseline loading, forward pass, and **top activating features** at a chosen token. This grounds the vocabulary of latents before any contrastive or causal work.
-
-2. **`sae_contrastive_search.py`**  
-   **Contrastive search** compares two prompts that differ mainly in negation, for example *The man is happy, he is* versus *The man is not happy, he is*. We take the **final-token** MLP-out vector for each run, encode both with the SAE, and rank features by **positive activation differences**. Features that spike only under negation are candidates for a **pure negation axis**. In this project line, **Feature 20151** is highlighted as that contrastive negation feature.
-
-3. **`sae_steering.py`**  
-   **Causal evidence** comes from **activation steering**: we add `coeff * W_dec[20151]` into **`blocks.8.hook_mlp_out`** at the **last input token** and sweep `coeff` over a dose grid. The printed table tracks **logit(` sad`) minus logit(` happy`)** and the **greedy next token** after the intervention. The point of the curve is to show a **dose-response**: small injections barely move the readout, while larger injections **invert** the local preference away from a naively *happy* continuation. In the project line summarized here, strong enough doses **flip the greedy prediction toward negation-style wording**, including **`not`**, while the sad-minus-happy gap moves in the direction expected if the model is being pulled into a negative or negated state. That combination is the **causal** capstone on Feature **20151**, not only a contrastive correlate.
-
-Together, these phases mirror a common MI workflow: **locate the circuit, localize the transforming submodule, then name and test the features inside it**.
+1. Start with **[`formal_writeup.md`](formal_writeup.md)** (abstract, methodology, three-part causal graph, falsification of feature 20151, script table).
+2. Open the cited **`.py`** files for exact prompts, hooks, and metric formulas.
+3. Optional: older folder writeups (`negation_circuit_writeup.md`, `ioi_circuit_writeup.md`, `induction_circuit_writeup.md`) for historical context; the **authoritative** negation story is the formal writeup plus the scripts it names.
 
 ---
 
@@ -95,10 +71,10 @@ Together, these phases mirror a common MI workflow: **locate the circuit, locali
 
 **Prerequisites**
 
-- A recent **Python** (3.10+ recommended).
-- **PyTorch** installed for your platform (CPU or CUDA). SAELens and TransformerLens follow your existing Torch install.
+- Python **3.10+** recommended.
+- **PyTorch** for your platform (CPU or CUDA).
 
-**Clone and environment**
+**Environment**
 
 ```bash
 git clone <your-repo-url> mech-interp
@@ -106,14 +82,14 @@ cd mech-interp
 python -m venv .venv
 ```
 
-On Windows PowerShell:
+Windows PowerShell:
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
-On macOS or Linux:
+macOS or Linux:
 
 ```bash
 source .venv/bin/activate
@@ -121,30 +97,26 @@ source .venv/bin/activate
 
 **Dependencies**
 
-Core libraries are pinned in `requirements.txt`:
-
-- **`transformer-lens`** for `HookedTransformer`, hooks, patching, and caches.
-- **`sae-lens`** for `SAE.from_pretrained`, encoders, and public release weights.
-- **`matplotlib`** for plots produced by some attribution scripts.
-
-Install with:
-
 ```bash
 pip install -U pip
 pip install -r requirements.txt
 ```
 
-If you use CUDA, install the matching **torch** wheel from the official PyTorch instructions first, then run `pip install -r requirements.txt` so dependency resolution sees your Torch build.
+Core packages include **transformer-lens**, **sae-lens**, **matplotlib**, and **circuitsvis** (for [`sae_scripts/l7h5_attention.py`](sae_scripts/l7h5_attention.py)). Install a CUDA **torch** build first if you use GPU, then run `pip install -r requirements.txt`.
 
-**Optional notes**
+First runs download **GPT-2 Small** and SAE weights; allow disk space and network as needed.
 
-- First runs will download **GPT-2 Small** and SAE weights from Hugging Face; ensure you have disk space and (if needed) network access.
-- Scripts are written as **command-line experiments**: open a file, read the constants at the top, then run with `python path/to/script.py` once your environment is active.
+**Running experiments**
+
+```bash
+python negation_scripts/resid_adjective_patch_sweep.py
+python sae_scripts/sae_necessity_test.py
+```
+
+Constants (prompts, layer IDs, feature ID) live at the top of each script.
 
 ---
 
-## How to read this repo
+## License
 
-Start with the **markdown writeups** in each folder for the narrative and tables, then open the corresponding **`.py`** files for the exact definitions of prompts, hooks, and metrics. The SAE phase assumes familiarity with the negation scripts, because the same prompt family motivates which contrast you run in **`sae_contrastive_search.py`** and which intervention you stress-test in **`sae_steering.py`**.
-
-
+See `LICENSE` in the repository root.

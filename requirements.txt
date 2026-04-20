@@ -1,3 +1,4 @@
 transformer-lens>=2.16.1
 matplotlib>=3.8.0
 sae-lens>=6.0.0
+circuitsvis>=1.43.0
