@@ -1,139 +1,151 @@
-# End-to-End Causal Structure of Semantic Negation in GPT-2 Small: Circuit Discovery and SAE Falsification
+# Competing Subsystems and Distributed Routing in GPT-2 Small: A Systems View of Semantic Negation
 
 ## Abstract
 
-This repository documents a mechanistic interpretability study of **GPT-2 Small** focused on **semantic negation** in template completions (for example, *The man is not happy, he is [sad]*). We combine **TransformerLens** interventions (path patching, residual patching, QKV patching) with **SAELens** analyses on a public MLP-output sparse autoencoder. The original working hypothesis was that **late MLPs** at layer 8 implement reversal, and that **SAE feature 20151** is a dedicated negation feature. Controlled **causal** tests falsified that story. The evidence instead supports a **two-stage attention circuit** that establishes polarity early, plus a **late suppressive prior** implemented partly as a **structural skip-gram style** feature that fights the logically correct antonym logit. This note states the **updated causal graph**, separates **correlation from causation** explicitly, and maps each claim to the **exact scripts** that justify it.
+We report a mechanistic interpretability study of **GPT-2 Small** on a controlled **semantic negation** completion task (for example, *The man is not happy, he is [sad]*). The project began with a familiar but fragile hypothesis: that **late MLP computation** implements logical negation and that a single **sparse autoencoder (SAE) feature** at MLP output might act as a discrete "negation unit." **Causal interventions** overturned that picture. The evidence supports a **systems-level** account: **competing subsystems** whose outputs **superimpose in residual space**. A **fast associative prior** anchored in late MLP channels (including a high-variance SAE direction) tends to reinforce **local lexical continuity** (for example *happy* after *happy*). A **slower, distributed attention-driven pathway** routes polarity information from the negation site to the adjective, then **late attention heads** (notably **L7H5**) **actuate** the antonym direction primarily through the **value pathway**, partially **overriding** the prior. We separate **correlational** probes (contrastive SAE ranking, linear direct logit attribution) from **interventional** probes (residual patching, head patching, sublayer patching, QKV patching, SAE zero-ablation). Every substantive claim below is tied to a **specific script** in this repository.
 
 ---
 
-## Directory structure (experiment code)
+## 1. Systems overview: heuristic prior versus logical override
 
-High level layout:
+Complex engineered systems, and learned dynamical systems, often exhibit **default dynamics**: shallow feedback that returns state toward familiar attractors. They also admit **override pathways** that inject task-specific corrections. Large language models are not literal programs with explicit *if-then* negation gates at single neurons. They are high-dimensional **vector computers** where **attention** and **MLPs** contribute additive updates to a shared residual stream.
 
-```text
-mech-interp/
-├── induction_scripts/          # Induction-style circuits (baseline + path patching)
-├── ioi_scripts/                # IOI-style name routing and patching
-├── negation_scripts/           # Negation completion: attribution + causal sweeps (this writeup’s core)
-├── sae_scripts/                # SAE loading, contrastive search, necessity tests, L7H5 attention viz
-├── formal_writeup.md           # This document
-├── requirements.txt
-└── README.md
-```
+We use two informal labels, grounded in our measurements rather than in any literal module boundary:
 
-**Negation scripts (causal graph):**
+1. **Fast associative subsystem (suppressive prior).** Late MLP blocks, here centered on **layer 8 output**, implement **shallow contextual prediction** aligned with **n-gram and repetition structure**. In SAE space, **feature 20151** behaves as a **structural skip-gram correlate**: it activates under local template continuity, not only under logical negation.
 
-| Script | Role |
-|--------|------|
-| [`negation_scripts/resid_adjective_patch_sweep.py`](negation_scripts/resid_adjective_patch_sweep.py) | Residual `hook_resid_post` patch at the **adjective** token, layers 0-6, corrupt run. Locates where clean negation state appears in depth. |
-| [`negation_scripts/router_heads_l1_l2_sweep.py`](negation_scripts/router_heads_l1_l2_sweep.py) | **Head-level** `hook_result` patch at adjective position only, layers 1-2. Ranks router heads; optional clean attention query(adjective)->key(not). |
-| [`negation_scripts/early_attn_mlp_adjective_patch.py`](negation_scripts/early_attn_mlp_adjective_patch.py) | Sublayer patches: `hook_attn_out` vs `hook_mlp_out` at layer 1 and 2, adjective only. Tests whether early MLPs **amplify** the routed signal. |
-| [`negation_scripts/l7h5_qkv_patching.py`](negation_scripts/l7h5_qkv_patching.py) | Q, K, and V path patching for **L7H5** on corrupt, from clean cache. |
-| [`negation_scripts/negation_baseline.py`](negation_scripts/negation_baseline.py), [`negation_head_attribution.py`](negation_scripts/negation_head_attribution.py), [`negation_mlp_attribution.py`](negation_scripts/negation_mlp_attribution.py) | Earlier linear readouts and baselines on the fixed prompt family. |
+2. **Slow computational subsystem (logical override).** Implemented as **distributed attention routing** in early layers, then **semantically directed attention** in mid-to-late layers. It does not read as a single gate. It reads as **constructive superposition**: multiple heads contribute partial updates that, together, move the final position’s logits toward the **antonym** relative to a **very**-style control.
 
-**SAE scripts (feature-level and attention):**
-
-| Script | Role |
-|--------|------|
-| [`sae_scripts/sae_contrastive_search.py`](sae_scripts/sae_contrastive_search.py) | **Correlation:** `Act_negated − Act_clean` in SAE space (false-positive generator if read causally). |
-| [`sae_scripts/sae_necessity_test.py`](sae_scripts/sae_necessity_test.py) | **Causality:** SAE latent zero-ablation, signed metrics, DLA layers 4-7, z-patch screen, "very" control for feature 20151. |
-| [`sae_scripts/sae_exploration.py`](sae_scripts/sae_exploration.py), [`sae_scripts/sae_steering.py`](sae_scripts/sae_steering.py) | Exploration and steering doses on MLP8 (historical baselines). |
-| [`sae_scripts/l7h5_attention.py`](sae_scripts/l7h5_attention.py) | CircuitsVis HTML + last-token attention row + negation vs happy mass. |
-
-Supporting assets: [`sae_scripts/l7h5_attention.html`](sae_scripts/l7h5_attention.html) (generated visualization).
+The empirical work tests **causal necessity and recovery**, not only interpretability stories suggested by heatmaps.
 
 ---
 
-## Methodology: circuits first, then negation as the main pipeline
+## 2. Methodology
 
-**Induction** (`induction_scripts/`) and **IOI** (`ioi_scripts/`) are the methodological backbone of the repo: they establish how we think about **clean versus corrupt pairs**, **activation caching**, **head patching**, and **recovery-style metrics**. Induction studies repeated structure and successor-style routing; IOI studies role and name identity under minimal edits. Those folders are foundational context for **how** we run interventions.
+**Model and libraries.** All experiments use **GPT-2 Small** through **TransformerLens** (`HookedTransformer`, activation caches, forward hooks). SAE experiments use **SAELens** with release **`gpt2-small-mlp-out-v5-32k`** at hook **`blocks.8.hook_mlp_out`**.
 
-The **negation pipeline** is where we invested the causal graph. Unless stated otherwise, the canonical pair is:
+**Canonical minimal pair.** Unless noted:
 
 - **Clean (negated):** `The man is not happy, he is`
-- **Corrupt (control):** `The man is very happy, he is` (same length, adjective aligned)
+- **Corrupt (control):** `The man is very happy, he is`
 
-The primary **metric** is **logit difference at the final token**:
+Tokenizations match in length; the adjective token **` happy`** aligns at **sequence index 5** under default settings in our scripts.
 
-**LD = logit(` sad`) − logit(` happy`)** (leading-space BPE fragments as in the code).
+**Primary metric (final token).** Let `id_sad` and `id_happy` be tokenizer ids for leading-space **` sad`** and **` happy`**. Define
 
-**Recovery** when patching corrupt with clean components:
+**LD = logit(` sad`) - logit(` happy`)**
 
-**Recovery = (LD_patched − LD_corrupt) / (LD_clean − LD_corrupt)**
+at the **last** input position. Higher LD favors the antonym relative to the repeated adjective reading.
 
-when the denominator is nonzero. This is a standard way to express how much of the clean-to-corrupt gap a single intervention closes.
+**Recovery under patching** of corrupt runs with clean activations:
 
-We distinguish:
+**Recovery = (LD_patched - LD_corrupt) / (LD_clean - LD_corrupt)**
 
-- **Observational / correlational:** contrastive activation differences, DLA-style dot products, attention maps.
-- **Interventional / causal:** ablations, path patching, residual patching, QKV patching.
+when the denominator is nonzero. Recovery estimates how much of the **clean-versus-corrupt separation** a single intervention restores.
 
----
+**Contrast versus causation.**
 
-## Results: the negation circuit (three-part graph)
+- **Correlational:** contrastive activation differences in SAE latents; linear **direct logit attribution (DLA)** using `W_U` directions without `ln_final` (a linearization, reported as such in code comments).
+- **Causal:** activation **patching** (residual, head write, sublayer output, QKV slices), and **SAE latent zero-ablation** with decode-back to MLP output.
 
-### Part A. Suppressive prior: late MLPs and SAE feature 20151
-
-**Early hypothesis:** Layer 8 MLP output “computes” negation, and feature **20151** is a negation feature.
-
-**Falsification (causal):** In [`sae_scripts/sae_necessity_test.py`](sae_scripts/sae_necessity_test.py), we **zero** latent 20151 in the SAE reconstruction of `blocks.8.hook_mlp_out`, then decode back. On the negation prompts, **ablation often increases LD**, so the feature’s presence **suppresses** the antonym edge relative to the ablated state. Full MLP8 zero-ablation can move LD in the same direction, which motivated **signed** reporting: **Δ = LD_ablated − LD_clean** (negative means the component was helping the antonym readout). The script also compares activation on **not** versus **very** at the last token; feature 20151 is **not** specific to “not”.
-
-**Conclusion:** Late MLP activity at this hook includes a **copy-style prior** aligned with repeating local structure (for example favoring *happy* after *happy*). Feature **20151** behaves like a **structural skip-gram correlate**, not a faithful negation atom. Steering in [`sae_scripts/sae_steering.py`](sae_scripts/sae_steering.py) remains useful as a **phenomenological** dose curve, but it must not be read as proving a “negation feature” in the logical sense after the necessity tests.
-
-### Part B. Step 1: distributed routers (layers 1 and 2)
-
-**Residual evidence:** [`negation_scripts/resid_adjective_patch_sweep.py`](negation_scripts/resid_adjective_patch_sweep.py) patches **`hook_resid_post`** at the **adjective** token only (index 5), swapping clean into corrupt, for layers 0-6. Recovery **jumps** by early depth (in our runs, near **full recovery** by layer 2-3), which pins **when** the adjective residual carries negation-relevant state.
-
-**Head evidence:** [`negation_scripts/router_heads_l1_l2_sweep.py`](negation_scripts/router_heads_l1_l2_sweep.py) patches a **single head's** `hook_result` at the adjective only, for layers 1-2. Heads such as **L1H0** rank highly; the script prints **clean** attention from query position **adjective** to key position **` not`**, which supports the reading that early heads **read** the negation token and **write** into the adjective site.
-
-**Sublayer check (amplification):** [`negation_scripts/early_attn_mlp_adjective_patch.py`](negation_scripts/early_attn_mlp_adjective_patch.py) patches **`hook_attn_out`** versus **`hook_mlp_out`** at layers 1-2, adjective only. In our runs, **attention outs** recover more than **MLP outs**; MLP patches can even **hurt** recovery. That is evidence against a simple story where early MLPs **amplify** the routed negation vector. Routing reads as **attention-driven** and **distributed**, not as an MLP gain stage at this site.
-
-### Part C. Step 2: semantic remappers (layers 6-7, L7H5)
-
-**Correlational direction:** [`sae_scripts/sae_necessity_test.py`](sae_scripts/sae_necessity_test.py) includes **linear DLA** (dot into **W_U[sad] - W_U[happy]**) for attention and MLP hooks in layers 4-7. **L7H5** shows a large positive head term in that screen, with a layer 6 cluster also contributing in the aggregate table.
-
-**Causal pathway:** [`negation_scripts/l7h5_qkv_patching.py`](negation_scripts/l7h5_qkv_patching.py) patches **Q**, **K**, or **V** for **L7H5** from clean into corrupt. In our runs, **Value** patching recovers most of the gap (**on the order of tens of percent**), while **Q** and **K** are comparatively weak. That is consistent with late heads **reading** a prepared residual mostly through the **value pathway** and writing toward the antonym direction at the final position, while competing with the late MLP suppressive prior from Part A.
-
-**Attention visualization:** [`sae_scripts/l7h5_attention.py`](sae_scripts/l7h5_attention.py) exports [`sae_scripts/l7h5_attention.html`](sae_scripts/l7h5_attention.html) and prints the last-row mass; the **negation attention ratio** there compares mass on negation keys versus **happy** for interpretation.
+Scripts in **`negation_scripts/`** and **`sae_scripts/`** implement the metrics exactly; numbers in prose refer to **representative runs** produced by those scripts on CPU unless you re-execute on other hardware.
 
 ---
 
-## The falsification of feature 20151: why contrastive search was misleading
+## 3. Phase 1: The suppressive prior and the falsification of feature 20151
 
-[`sae_scripts/sae_contrastive_search.py`](sae_scripts/sae_contrastive_search.py) ranks features by **positive** differences **negated minus clean** in SAE space at a chosen token. That design is excellent for **hypothesis generation**: it surfaces latents that **co-occur** with the surface cue *not*.
+### 3.1 Correlational origin: contrastive SAE search
 
-It is **not** a causal identification strategy. Correlation **does not** equal causation: a feature can track the negated template for **structural** reasons (shared bigrams, clause shape, repetition) while the **causal** role of its MLP channel is to **support** a **happy**-like prior.
+[`sae_scripts/sae_contrastive_search.py`](sae_scripts/sae_contrastive_search.py) compares **final-token** MLP-out activations on a **clean** versus **negated** prompt, encodes both with the SAE, and ranks latents by **positive** differences **negated minus clean**. That procedure is appropriate for **hypothesis generation**: it surfaces features that **co-vary** with the presence of *not*.
 
-[`sae_scripts/sae_necessity_test.py`](sae_scripts/sae_necessity_test.py) closes the loop:
+**Systems reading:** contrastive ranking answers "what differs," not "what causes the logit change."
 
-1. **Zero-ablation** of latent 20151 shifts logits in the direction consistent with **removing a suppressor** of the antonym edge on several prompts.
-2. The **not** versus **very** activation probe shows the feature is **not** a clean “not detector.”
-3. **Full MLP8** ablation and **feature-only** ablation are reported with **aligned** recovery ratios only when effects share sign, to avoid bogus “percent explained” when the layer acts as a **net suppressor** on LD.
+### 3.2 Causal tests: necessity, signed effects, and controls
 
-Together, this is the repo’s clearest **rigor** story: we **named** a feature from correlation, then **broke** the naive interpretation with necessity-style tests.
+[`sae_scripts/sae_necessity_test.py`](sae_scripts/sae_necessity_test.py) performs **zero-ablation** in SAE space: encode MLP output, set latent **20151** to zero, decode, replace **`blocks.8.hook_mlp_out`**. On several negation-style prompts, **ablating** the feature **increases** LD relative to the unablated forward pass. Equivalently, the feature’s presence **suppresses** the antonym edge on those measurements. The script therefore reports **signed ablation deltas** **LD_ablated - LD_clean**, not naive "percent drop" formulas that flip sign when late MLPs behave as **net suppressors** on LD.
 
----
+The same script compares feature activation on **not** versus **very** minimal pairs. Feature **20151** is **not** a clean detector of *not* alone; it tracks **shared surface structure** around *happy*.
 
-## Code map (quick reference)
+**Full MLP8 zero-ablation** in that file provides a **ceiling-style** reference for how destructive removing all of layer 8 MLP output is for the metric, and **aligned ratio** summaries only when feature and full-layer effects share sign.
 
-| Finding | Primary scripts |
-|--------|-------------------|
-| Residual “jump” at adjective by depth | [`resid_adjective_patch_sweep.py`](negation_scripts/resid_adjective_patch_sweep.py) |
-| Early router heads L1-L2 | [`router_heads_l1_l2_sweep.py`](negation_scripts/router_heads_l1_l2_sweep.py) |
-| Attn vs MLP at L1-2 (amplification test) | [`early_attn_mlp_adjective_patch.py`](negation_scripts/early_attn_mlp_adjective_patch.py) |
-| L7H5 QKV decomposition | [`l7h5_qkv_patching.py`](negation_scripts/l7h5_qkv_patching.py) |
-| DLA screen + SAE necessity + controls | [`sae_necessity_test.py`](sae_scripts/sae_necessity_test.py) |
-| Contrastive false-positive generator | [`sae_contrastive_search.py`](sae_scripts/sae_contrastive_search.py) |
-| L7H5 attention figure | [`l7h5_attention.py`](sae_scripts/l7h5_attention.py) |
+### 3.3 Systems synthesis for Phase 1
+
+Late MLP channels at this depth participate in a **default continuation prior** that favors **repeating the visible predicate**. SAE feature **20151** is better understood as a **compressive axis** aligned with that prior than as a **logic node**. This is the central **falsification** of a single-feature negation story and the strongest **causal** highlight of the SAE portion of the repo.
+
+Related exploratory and steering scripts (phenomenology, not necessity): [`sae_scripts/sae_exploration.py`](sae_scripts/sae_exploration.py), [`sae_scripts/sae_steering.py`](sae_scripts/sae_steering.py).
 
 ---
 
-## Limitations (short)
+## 4. Phase 2: Distributed routers (layers 1 and 2)
 
-Linear DLA ignores `ln_final` and is best paired with patching. Single-head patches at a single position underestimate distributed routing. Recovery percentages can exceed 100% when nonlinear interactions couple patches to later blocks. We report those caveats in the scripts where they matter.
+### 4.1 When the adjective residual becomes informative
+
+[`negation_scripts/resid_adjective_patch_sweep.py`](negation_scripts/resid_adjective_patch_sweep.py) patches **`blocks.L.hook_resid_post`** **only** at the **adjective** position, swapping the **clean** vector into the **corrupt** forward, for **L = 0 ... 6**. Recovery **jumps** by mid depth: in reported runs, recovery reaches on the order of **full** restoration of the clean-corrupt gap by **layer 2-3**, which localizes **when** the adjective site carries enough negation-relevant state for this metric.
+
+**Systems reading:** the residual at the adjective is not "empty" until late depth; a **distributed** sequence of blocks builds a state there that differs systematically between *not* and *very*.
+
+### 4.2 Head-level writes at the adjective
+
+[`negation_scripts/router_heads_l1_l2_sweep.py`](negation_scripts/router_heads_l1_l2_sweep.py) requires **`model.set_use_attn_result(True)`** so **`hook_result`** is materialized. For each head in layers **1** and **2**, it patches **only** the adjective position’s head slice from **clean** into **corrupt**. Heads such as **L1H0** rank highly on recovery among this narrow intervention class. The script optionally prints **clean** attention from the **adjective** query position to the **` not`** key position for the top head, supporting the interpretation **read negation, write at adjective**.
+
+**Systems reading:** routing is **distributed** and **sparse in head space**; no single head is the whole story.
+
+### 4.3 Sublayer decomposition: attention versus MLP at the same site
+
+[`negation_scripts/early_attn_mlp_adjective_patch.py`](negation_scripts/early_attn_mlp_adjective_patch.py) patches **`hook_attn_out`** versus **`hook_mlp_out`** at layers **1** and **2**, adjective only. In reported runs, **attention outputs** recover more of the gap than **MLP outputs**; MLP patches can **hurt** recovery.
+
+**Systems reading:** early **MLP** substeps at this token are not a simple **gain amplifier** for the routed negation signal. The constructive state is carried disproportionately by **attention-driven** updates, consistent with **distributed routing** rather than a localized MLP "amplifier."
 
 ---
 
-## Citation style for this repo
+## 5. Phase 3: Semantic remappers (layers 6-7, emphasis on L7H5)
 
-If you reuse this narrative, cite the **scripts** and the **metric definitions** inside them as the ground truth for numbers, because exact logits vary slightly with library versions and hardware.
+### 5.1 Correlational direction: linear DLA screen
+
+[`sae_scripts/sae_necessity_test.py`](sae_scripts/sae_necessity_test.py) includes a **linear DLA** block for layers **4-7**: per-head **(z_h @ W_O[h])** dotted with **W_U[sad] - W_U[happy]**, plus layer aggregates for **`hook_attn_out`** and **`hook_mlp_out`**. **L7H5** registers among the largest head-level terms in representative runs; layer **6** shows a **cluster** of heads in the same screen.
+
+**Caveat:** DLA omits `ln_final`. It is an **orientation** tool, not a substitute for patching.
+
+### 5.2 Causal pathway decomposition: Q versus K versus V
+
+[`negation_scripts/l7h5_qkv_patching.py`](negation_scripts/l7h5_qkv_patching.py) patches **only head 5** on **`hook_q`**, **`hook_k`**, or **`hook_v`** from **clean** into **corrupt**. In representative runs, **value** patching recovers a large fraction of the clean-corrupt gap (**on the order of tens of percent**, near **45%** in one CPU log), while **query** and **key** patches are comparatively weak.
+
+**Systems reading:** for this head, **what is mixed into the output** along the value pathway carries the intervention information relevant to LD, consistent with **actuators** that **read** prepared residual content and **write** toward logits, rather than only re-shaping compatibility with **Q/K** alone.
+
+### 5.3 Attention visualization as auxiliary evidence
+
+[`sae_scripts/l7h5_attention.py`](sae_scripts/l7h5_attention.py) renders an interactive **CircuitsVis** figure ([`sae_scripts/l7h5_attention.html`](sae_scripts/l7h5_attention.html)) and prints the **last-query** attention row. This supports qualitative inspection; **causal** claims rest on patching and ablation, not on the figure alone.
+
+---
+
+## 6. Conclusion: systems synthesis
+
+GPT-2 Small does not resolve this negation template through a single interpretable gate. It resolves it through **superposed updates**:
+
+- A **late associative prior**, expressed in MLP output space and partially captured by high-variance SAE directions such as **20151**, **fights** the antonym logit by reinforcing **local continuity**.
+- An **attention-mediated override** **routes** polarity-related information **early** into the adjective residual **without** relying on early MLP amplification in our sublayer tests.
+- **Late attention heads**, including **L7H5**, **actuate** the antonym direction largely through the **value pathway**, consistent with **reading** a prepared residual and **writing** into the logit readout.
+
+This is **systems thinking** in the narrow sense we intend: **competing subsystems**, **distributed routing**, and **measured overrides**, grounded in **interventions** first.
+
+---
+
+## 7. Code reference map
+
+| Claim family | Primary scripts |
+|--------------|------------------|
+| Contrastive SAE ranking (correlation) | [`sae_scripts/sae_contrastive_search.py`](sae_scripts/sae_contrastive_search.py) |
+| SAE zero-ablation, signed metrics, DLA, controls | [`sae_scripts/sae_necessity_test.py`](sae_scripts/sae_necessity_test.py) |
+| Residual depth sweep at adjective | [`negation_scripts/resid_adjective_patch_sweep.py`](negation_scripts/resid_adjective_patch_sweep.py) |
+| Head-level router sweep L1-L2 | [`negation_scripts/router_heads_l1_l2_sweep.py`](negation_scripts/router_heads_l1_l2_sweep.py) |
+| Early attn versus MLP sublayer test | [`negation_scripts/early_attn_mlp_adjective_patch.py`](negation_scripts/early_attn_mlp_adjective_patch.py) |
+| L7H5 QKV patching | [`negation_scripts/l7h5_qkv_patching.py`](negation_scripts/l7h5_qkv_patching.py) |
+| L7H5 attention visualization | [`sae_scripts/l7h5_attention.py`](sae_scripts/l7h5_attention.py) |
+| SAE exploration and steering (context) | [`sae_scripts/sae_exploration.py`](sae_scripts/sae_exploration.py), [`sae_scripts/sae_steering.py`](sae_scripts/sae_steering.py) |
+| Earlier linear attributions (context) | [`negation_scripts/negation_head_attribution.py`](negation_scripts/negation_head_attribution.py), [`negation_scripts/negation_mlp_attribution.py`](negation_scripts/negation_mlp_attribution.py) |
+
+---
+
+## 8. Limitations
+
+Linear DLA ignores layer norm at unembedding. Single-site patches underestimate **distributed** computation. Recovery can exceed **100%** when nonlinear coupling makes patched activations interact with later blocks non-monotonically. All quantitative statements should be **recomputed** from scripts when precision matters for publication.

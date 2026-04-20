@@ -2,9 +2,9 @@
 
 ## What this repo is
 
-This is a **mechanistic interpretability** codebase for **GPT-2 Small**. We use **TransformerLens** for full forward access, hooks, and caches, and **SAELens** where we study a public sparse autoencoder on MLP outputs. The centerpiece is an **end-to-end causal story for semantic negation** in a fixed completion template, backed by path patching, residual patching, QKV patching, and necessity-style SAE ablations.
+This is a **mechanistic interpretability** codebase for **GPT-2 Small**. We use **TransformerLens** for full forward access, hooks, and caches, and **SAELens** where we study a public sparse autoencoder on MLP outputs. The centerpiece is a **causal, systems-level** account of **semantic negation** in a fixed completion template: **competing subsystems** (a **late associative prior** versus a **distributed attention override**), backed by patching and ablation rather than by attention plots alone.
 
-The headline result is **not** “layer 8 MLP implements negation” or “SAE feature 20151 is the negation feature.” Controlled runs **falsified** those hypotheses. See **[`formal_writeup.md`](formal_writeup.md)** for the full graph: **early attention routers**, **late attention value pathways (including L7H5)**, and a **late suppressive MLP prior** (including feature **20151** as a **structural** correlate, not a logical negation atom).
+The headline result is **not** “layer 8 MLP implements negation” or “SAE feature 20151 is the negation feature.” Controlled runs **falsified** those hypotheses. See **[`formal_writeup.md`](formal_writeup.md)** (*Competing Subsystems and Distributed Routing in GPT-2 Small*) for the full argument: **early routers**, **L7H5 value-pathway actuation**, and **feature 20151** as a **structural** correlate falsified by necessity testing.
 
 ---
 
